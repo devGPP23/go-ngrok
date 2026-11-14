@@ -2,14 +2,18 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"os"
 	"os/signal"
 	"time"
 
 	"github.com/apoorvslst/go-ngrok/internal/client"
+	"github.com/apoorvslst/go-ngrok/internal/client/forwarder"
 	"github.com/apoorvslst/go-ngrok/internal/config"
+	"github.com/apoorvslst/go-ngrok/internal/inspector"
 )
 
 func main() {
@@ -20,15 +24,28 @@ func main() {
 	token := "dev-secret-token"
 	desiredSubdomain := "gaurav"
 	localTarget := "localhost:3000" // Humara local web app yahan chalega!
+	inspectorAddr := ":4040"        // Web interface port for live traffic inspector
 
-	// Exponential Backoff Config
+	// 1. Day 7 Inspector Engine initialize karo (100 requests fixed ring buffer)
+	inspectorStorage := inspector.NewRingBuffer(100)
+	forwarder.SetInspectorStorage(inspectorStorage)
+
+	inspectorServer := inspector.NewServer(inspectorAddr, inspectorStorage, localTarget)
+	go func() {
+		if err := inspectorServer.Start(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			slog.Error("inspector web server stopped with error", "err", err)
+		}
+	}()
+	defer inspectorServer.Close()
+
+	// Exponential Backoff Config for reconnection
 	bCfg := client.BackoffConfig{
 		BaseDelay:  1 * time.Second,
 		MaxDelay:   15 * time.Second,
 		MaxRetries: 0, // 0 = retry forever until user presses Ctrl+C
 	}
 
-	slog.Info("GoNgrok Client starting with auto-reconnect...", "subdomain", desiredSubdomain)
+	slog.Info("GoNgrok Client starting with auto-reconnect and inspector...", "subdomain", desiredSubdomain)
 
 	// 🔥 Auto-Reconnect Engine (Saara connect/handshake iske andar hoga)
 	err := client.RetryWithBackoff(ctx, bCfg, "tunnel-client", func() error {
@@ -45,7 +62,12 @@ func main() {
 			return fmt.Errorf("handshake failed: %w", err)
 		}
 
-		fmt.Printf("\n🚀 TUNNEL LIVE AT: %s\n", authResp.AssignedURL)
+		// Ngrok style friendly console banner
+		fmt.Printf("\n============================================================\n")
+		fmt.Printf("🚀 TUNNEL LIVE AT:             %s\n", authResp.AssignedURL)
+		fmt.Printf("Forwarding:                    %s -> http://%s\n", authResp.AssignedURL, localTarget)
+		fmt.Printf("Web Interface (Inspector):     http://127.0.0.1%s\n", inspectorAddr)
+		fmt.Printf("============================================================\n")
 		fmt.Println("Press Ctrl+C to quit.")
 
 		// 3. Yamux Session elevate karo

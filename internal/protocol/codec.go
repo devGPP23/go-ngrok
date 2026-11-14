@@ -49,21 +49,32 @@ func ReadMessage[T any](r io.Reader) (*T, error) {
 	// Declare a variable 'target' of type T (e.g., HelloMessage) to hold the decoded data.
 	var target T
 
-	// json.NewDecoder creates a streaming decoder that reads bytes from 'r' on demand.
-	decoder := json.NewDecoder(r)
-
-	// decoder.Decode reads from 'r' until it has parsed one complete JSON object into &target.
-	err := decoder.Decode(&target)
-
-	// Check if decoding failed or if the network stream closed.
-	if err != nil {
-		// io.EOF happens when the other end of the connection gracefully closes the socket.
-		// We return io.EOF directly so the caller knows the peer disconnected normally (not a bug).
-		if errors.Is(err, io.EOF) {
-			return nil, io.EOF
+	// Framed reading: Byte-by-byte tab tak padho jab tak '\n' delimiter nahi mil jata.
+	// json.NewDecoder(r) internally 512 bytes buffer kar leta hai jo multiple frames mein
+	// agle frames ko kha jata tha. Isliye '\n' tak read karke direct JSON Unmarshal karte hain.
+	var line []byte
+	oneByte := make([]byte, 1)
+	for {
+		n, err := r.Read(oneByte)
+		if n > 0 {
+			line = append(line, oneByte[0])
+			if oneByte[0] == '\n' {
+				break
+			}
 		}
+		if err != nil {
+			if errors.Is(err, io.EOF) {
+				if len(line) == 0 {
+					return nil, io.EOF
+				}
+				break
+			}
+			return nil, fmt.Errorf("failed to read protocol message: %w", err)
+		}
+	}
 
-		// Wrap any other error (such as malformed JSON syntax or connection reset).
+	// JSON unmarshal karo complete single frame ko
+	if err := json.Unmarshal(line, &target); err != nil {
 		return nil, fmt.Errorf("failed to decode protocol message: %w", err)
 	}
 
