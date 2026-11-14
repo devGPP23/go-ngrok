@@ -12,6 +12,7 @@ import (
 
 	"github.com/apoorvslst/go-ngrok/internal/client"
 	"github.com/apoorvslst/go-ngrok/internal/client/forwarder"
+	"github.com/apoorvslst/go-ngrok/internal/client/telemetry"
 	"github.com/apoorvslst/go-ngrok/internal/config"
 	"github.com/apoorvslst/go-ngrok/internal/inspector"
 )
@@ -62,12 +63,9 @@ func main() {
 			return fmt.Errorf("handshake failed: %w", err)
 		}
 
-		// Ngrok style friendly console banner
-		fmt.Printf("\n============================================================\n")
-		fmt.Printf("🚀 TUNNEL LIVE AT:             %s\n", authResp.AssignedURL)
-		fmt.Printf("Forwarding:                    %s -> http://%s\n", authResp.AssignedURL, localTarget)
-		fmt.Printf("Web Interface (Inspector):     http://127.0.0.1%s\n", inspectorAddr)
-		fmt.Printf("============================================================\n")
+		// Day 9: Gaurav's Terminal Dashboard render karo!
+		dashboard := telemetry.NewTerminalDashboard(desiredSubdomain, "http://"+localTarget, authResp.AssignedURL)
+		dashboard.RenderBanner()
 		fmt.Println("Press Ctrl+C to quit.")
 
 		// 3. Yamux Session elevate karo
