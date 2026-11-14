@@ -3,12 +3,13 @@ package httpserver
 import (
 	"log/slog"
 	"net/http"
-		"github.com/apoorvslst/go-ngrok/internal/server/proxy"
+
+	"github.com/apoorvslst/go-ngrok/internal/server/middleware"
+	"github.com/apoorvslst/go-ngrok/internal/server/proxy"
 	"github.com/apoorvslst/go-ngrok/internal/server/registry"
 )
 
 /*
-
  REAL-WORLD EXAMPLE: The Public Front Gate (Public HTTP Listener)
 
 WHO IS WHO?
@@ -30,19 +31,20 @@ WHO IS WHO?
 
 WHAT HAPPENS AT THIS PUBLIC LISTENER?
 1. Visitor knocks on Port :8080 asking for "apoorv.tunnel.dev:8080/pay".
-2. This HTTP handler reads the Host header: "apoorv.tunnel.dev:8080".
-3. ExtractSubdomain extracts the name: "apoorv".
-4. Looks up "apoorv" in the Registry (Phonebook).
-   - If Apoorv's laptop is NOT connected -> Responds with 404 "Tunnel not found".
-   - If Apoorv's laptop IS connected -> Confirms the tunnel is alive!
-     (On Day 5, it will pipe the HTTP request directly into Apoorv's laptop).
+2. Panic Recovery Middleware intercepts to protect server from unexpected crashes.
+3. Token Bucket Rate Limiter ensures visitor doesn't flood the server.
+4. Stream Semaphore prevents client laptop overload.
+5. Pipe the HTTP request directly into laptop via Yamux stream!
 */
 
 // StartPublicListener starts the HTTP server that receives visitor requests.
 func StartPublicListener(addr string, reg *registry.Registry, rootDomain string) error {
-	// Use the real reverse proxy handler with Yamux DialContext trick!
-	handler := proxy.NewTunnelProxy(reg, rootDomain)
-	slog.Info("public HTTP listener starting", "addr", addr)
-	//Ab server par port :8080 pe jo bhi visitor request aayegi, woh seedha proxy.NewTunnelProxy ke paas jayegi, jo request ko Yamux stream ke zariye client tak pipe kar dega!
-	return http.ListenAndServe(addr, handler)
+	// 1. Create the reverse proxy handler with Yamux DialContext trick
+	proxyHandler := proxy.NewTunnelProxy(reg, rootDomain)
+
+	// 2. 🛡️ Wrap with Panic Recovery Middleware taaki koi bhi handler crash na hone de
+	protectedHandler := middleware.Recoverer(proxyHandler)
+
+	slog.Info("public HTTP listener starting with abuse controls & recovery", "addr", addr)
+	return http.ListenAndServe(addr, protectedHandler)
 }
